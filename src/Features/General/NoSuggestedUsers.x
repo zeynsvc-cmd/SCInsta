@@ -1,5 +1,6 @@
 #import "../../Utils.h"
 #import "../../InstagramHeaders.h"
+#import <objc/runtime.h>
 
 // "Welcome to instagram" suggested users in feed
 %hook IGSuggestedUnitViewModel
@@ -25,31 +26,32 @@
 } 
 %end
 
-// Suggested users in profile header
-%hook IGProfileHeaderView
-- (id)objectsForListAdapter:(id)arg1 {
-    NSArray *originalObjs = %orig();
-    NSMutableArray *filteredObjs = [NSMutableArray arrayWithCapacity:[originalObjs count]];
-
-    for (id obj in originalObjs) {
-        BOOL shouldHide = NO;
-
-        if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
-            if ([obj isKindOfClass:%c(IGProfileChainingModel)]) {
-                NSLog(@"[SCInsta] Hiding suggested users: profile header");
-
-                shouldHide = YES;
-            }
-        }
-
-        // Populate new objs array
-        if (!shouldHide) {
-            [filteredObjs addObject:obj];
-        }
+static NSArray *SCIHideProfileSuggestions(NSArray *items) {
+    if (![SCIUtils getBoolPref:@"hide_profile_suggestions"]) {
+        return items;
     }
 
-    return [filteredObjs copy];
+    Class chainingModel = objc_lookUpClass("IGProfileChainingModel");
+    Class shimmerModel = objc_lookUpClass("IGProfileChainingShimmerModel");
+    return [items filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id item, NSDictionary *bindings) {
+        return ![item isKindOfClass:chainingModel] && ![item isKindOfClass:shimmerModel];
+    }]];
 }
+
+%group SCILegacyProfileHeader
+%hook IGProfileHeaderView
+- (NSArray *)objectsForListAdapter:(id)adapter {
+    return SCIHideProfileSuggestions(%orig(adapter));
+}
+%end
+%end
+
+%group SCISwiftProfileHeader
+%hook _TtC15IGProfileHeader19IGProfileHeaderView
+- (NSArray *)objectsForListAdapter:(id)adapter {
+    return SCIHideProfileSuggestions(%orig(adapter));
+}
+%end
 %end
 
 // Notifications/activity feed
@@ -243,7 +245,7 @@
     NSOrderedSet *allActions = [arg3 copy];
     NSOrderedSet *overflowActions = [arg4 copy];
 
-    if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
+    if ([SCIUtils getBoolPref:@"hide_profile_suggestions"]) {
         NSPredicate *predicate = [NSPredicate predicateWithFormat:@"NOT (SELF IN %@)", @[ @(3) ]];
         
         // Actions sets
@@ -261,3 +263,22 @@
     return %orig(arg1, rows, allActions, overflowActions, arg5, arg6, arg7, arg8, arg9, arg10, arg11);
 }
 %end
+
+%ctor {
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{
+        @"hide_profile_suggestions": @([SCIUtils getBoolPref:@"no_suggested_users"])
+    }];
+
+    %init;
+
+    SEL listSelector = NSSelectorFromString(@"objectsForListAdapter:");
+    Class legacyHeader = objc_lookUpClass("IGProfileHeaderView");
+    if (legacyHeader && class_getInstanceMethod(legacyHeader, listSelector)) {
+        %init(SCILegacyProfileHeader);
+    }
+
+    Class swiftHeader = objc_lookUpClass("_TtC15IGProfileHeader19IGProfileHeaderView");
+    if (swiftHeader && class_getInstanceMethod(swiftHeader, listSelector)) {
+        %init(SCISwiftProfileHeader);
+    }
+}
