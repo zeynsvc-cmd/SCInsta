@@ -1,0 +1,641 @@
+diff --git a/build.sh b/build.sh
+index a0af675..963f0b0 100644
+--- a/build.sh
++++ b/build.sh
+@@ -75,7 +75,7 @@ then
+     # Create IPA File
+     echo -e '\033[1m\033[32mCreating the IPA file...\033[0m'
+     rm -f packages/SCInsta-sideloaded.ipa
+-    cyan -i "packages/${ipaFile}" -o packages/SCInsta-sideloaded.ipa -f $SCINSTAPATH $FLEXPATH -c $COMPRESSION -m 15.0 -du
++    cyan -i "packages/${ipaFile}" -o packages/SCInsta-sideloaded.ipa -f $SCINSTAPATH $FLEXPATH -n Bunker -c $COMPRESSION -m 15.0 -du
+     
+     # Patch IPA for sideloading
+     ipapatch --input "packages/SCInsta-sideloaded.ipa" --inplace --noconfirm
+@@ -117,4 +117,4 @@ else
+     echo
+     echo 'Usage: ./build.sh <sideload/rootless/rootful>'
+     exit 1
+-fi
+\ No newline at end of file
++fi
+diff --git a/src/Features/General/FollowBack.x b/src/Features/General/FollowBack.x
+new file mode 100644
+index 0000000..fffa0a7
+--- /dev/null
++++ b/src/Features/General/FollowBack.x
+@@ -0,0 +1,268 @@
++#import "../../InstagramHeaders.h"
++#import <objc/runtime.h>
++
++@interface IGProfileViewController : UIViewController
++- (IGUser *)user;
++@end
++
++@interface IGUser (BunkerFollowBack)
++- (id)pk;
++@end
++
++@interface IGWindow (BunkerFollowBack)
++- (id)pk;
++@end
++
++@interface IGUserListNetworkDataSource : NSObject
++- (instancetype)initWithUserSession:(IGUserSession *)session fetchPath:(NSString *)path endpointLoggingIdentifier:(NSString *)identifier;
++@property (nonatomic, weak) id delegate;
++- (void)fetchData;
++- (void)fetchMoreData;
++- (BOOL)moreAvailable;
++- (id)allResults;
++- (NSString *)maxID;
++@end
++
++@interface BunkerFollowBackController : UITableViewController
++- (instancetype)initWithSession:(IGUserSession *)session userID:(NSString *)userID;
++- (void)loadList:(NSString *)list;
++- (void)monitorRequest:(IGUserListNetworkDataSource *)source;
++- (void)consumeList:(IGUserListNetworkDataSource *)source;
++- (void)dataSourceDidFailLoad:(IGUserListNetworkDataSource *)source;
++@end
++
++@implementation BunkerFollowBackController {
++    IGUserSession *_session;
++    NSString *_userID;
++    IGUserListNetworkDataSource *_source;
++    NSSet<NSString *> *_followers;
++    NSArray<NSString *> *_results;
++    NSMutableSet<NSString *> *_pageCursors;
++    NSUInteger _requestGeneration;
++}
++
++- (instancetype)initWithSession:(IGUserSession *)session userID:(NSString *)userID {
++    self = [super initWithStyle:UITableViewStylePlain];
++    if (self) {
++        _session = session;
++        _userID = [userID copy];
++        self.title = @"Geri takip etmeyenler";
++    }
++    return self;
++}
++
++- (void)viewDidLoad {
++    [super viewDidLoad];
++    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
++    [self loadList:@"followers"];
++}
++
++- (void)close {
++    _source.delegate = nil;
++    _source = nil;
++    [self dismissViewControllerAnimated:YES completion:nil];
++}
++
++- (void)showStatus:(NSString *)text {
++    UILabel *label = [[UILabel alloc] init];
++    label.text = text;
++    label.textAlignment = NSTextAlignmentCenter;
++    label.textColor = UIColor.secondaryLabelColor;
++    label.numberOfLines = 0;
++    self.tableView.backgroundView = label;
++}
++
++- (void)loadList:(NSString *)list {
++    _source.delegate = nil;
++    _pageCursors = [NSMutableSet set];
++    Class sourceClass = objc_lookUpClass("IGUserListNetworkDataSource");
++    SEL initializer = @selector(initWithUserSession:fetchPath:endpointLoggingIdentifier:);
++    if (![sourceClass instancesRespondToSelector:initializer] ||
++        ![sourceClass instancesRespondToSelector:@selector(allResults)] ||
++        ![sourceClass instancesRespondToSelector:@selector(moreAvailable)] ||
++        ![sourceClass instancesRespondToSelector:@selector(fetchMoreData)] ||
++        ![sourceClass instancesRespondToSelector:@selector(fetchData)] ||
++        ![sourceClass instancesRespondToSelector:@selector(maxID)] ||
++        ![sourceClass instancesRespondToSelector:@selector(setDelegate:)]) {
++        [self showStatus:@"Bu Instagram sürümünde takip listesi yüklenemiyor."];
++        return;
++    }
++    NSString *path = [NSString stringWithFormat:@"/friendships/%@/%@/", _userID, list];
++    _source = [[sourceClass alloc] initWithUserSession:_session fetchPath:path endpointLoggingIdentifier:list];
++    if (!_source) {
++        [self showStatus:@"Takip listesi yüklenemedi."];
++        return;
++    }
++    _source.delegate = self;
++    [self showStatus:_followers ? @"Takip ettiklerin yükleniyor…" : @"Takipçilerin yükleniyor…"];
++    [self monitorRequest:_source];
++    [_source fetchData];
++}
++
++- (void)monitorRequest:(IGUserListNetworkDataSource *)source {
++    NSUInteger generation = ++_requestGeneration;
++    __weak BunkerFollowBackController *weakSelf = self;
++    __weak IGUserListNetworkDataSource *weakSource = source;
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
++        BunkerFollowBackController *controller = weakSelf;
++        if (controller && weakSource && controller->_requestGeneration == generation) {
++            [controller dataSourceDidFailLoad:weakSource];
++        }
++    });
++}
++
++- (void)dataSourceDidStartLoading:(IGUserListNetworkDataSource *)source {
++}
++
++- (void)dataSourceDidFailLoad:(IGUserListNetworkDataSource *)source {
++    dispatch_async(dispatch_get_main_queue(), ^{
++        if (source != self->_source) return;
++        source.delegate = nil;
++        self->_source = nil;
++        [self showStatus:@"Takip listesi yüklenemedi. Daha sonra tekrar dene."];
++    });
++}
++
++- (void)dataSourceDidFinishLoading:(IGUserListNetworkDataSource *)source {
++    dispatch_async(dispatch_get_main_queue(), ^{
++        if (source != self->_source) return;
++        self->_requestGeneration++;
++        [self consumeList:source];
++    });
++}
++
++- (void)consumeList:(IGUserListNetworkDataSource *)source {
++    if (source.moreAvailable) {
++        NSString *cursor = source.maxID;
++        if (![cursor isKindOfClass:[NSString class]] || !cursor.length || [_pageCursors containsObject:cursor]) {
++            [self dataSourceDidFailLoad:source];
++            return;
++        }
++        [_pageCursors addObject:cursor];
++        [self monitorRequest:source];
++        [source fetchMoreData];
++        return;
++    }
++
++    id rows = source.allResults;
++    if ([rows isKindOfClass:[NSOrderedSet class]]) rows = [rows array];
++    if (![rows isKindOfClass:[NSArray class]]) {
++        [self dataSourceDidFailLoad:source];
++        return;
++    }
++    NSMutableDictionary<NSString *, NSString *> *names = [NSMutableDictionary dictionary];
++    for (id row in rows) {
++        id user = row;
++        if (![user respondsToSelector:@selector(username)] && [row respondsToSelector:@selector(user)]) {
++            user = [row user];
++        }
++        NSString *name = [user respondsToSelector:@selector(username)] ? [user username] : nil;
++        if (![name isKindOfClass:[NSString class]] || !name.length) {
++            [self dataSourceDidFailLoad:source];
++            return;
++        }
++        names[name.lowercaseString] = name;
++    }
++
++    if (!_followers) {
++        _followers = [NSSet setWithArray:names.allKeys];
++        [self loadList:@"following"];
++        return;
++    }
++    NSMutableArray<NSString *> *missing = [NSMutableArray array];
++    for (NSString *name in names) {
++        if (![_followers containsObject:name]) [missing addObject:names[name]];
++    }
++    _results = [missing sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
++    source.delegate = nil;
++    _source = nil;
++    if (_results.count) {
++        self.tableView.backgroundView = nil;
++    } else {
++        [self showStatus:@"Takip ettiğin herkes seni geri takip ediyor."];
++    }
++    [self.tableView reloadData];
++}
++
++- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
++    return _results.count;
++}
++
++- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
++    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"BunkerFollowBackUser"];
++    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"BunkerFollowBackUser"];
++    cell.textLabel.text = [@"@" stringByAppendingString:_results[indexPath.row]];
++    cell.selectionStyle = UITableViewCellSelectionStyleNone;
++    return cell;
++}
++
++@end
++
++static NSString *BunkerUserID(id value) {
++    if ([value isKindOfClass:[NSNumber class]]) value = [value stringValue];
++    if (![value isKindOfClass:[NSString class]] || ![value length] ||
++        [value rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet]].location != NSNotFound) return nil;
++    return value;
++}
++
++static IGProfileViewController *BunkerProfileController(UIView *view) {
++    Class profileClass = objc_lookUpClass("IGProfileViewController");
++    for (UIResponder *responder = view.nextResponder; responder; responder = responder.nextResponder) {
++        if ([responder isKindOfClass:profileClass]) return (IGProfileViewController *)responder;
++    }
++    return nil;
++}
++
++static char BunkerPendingFollowersTap;
++
++%group BunkerFollowBack435
++%hook _TtC23IGProfileHeaderIdentity38IGProfileHeaderStatButtonContainerView
++- (void)didTapFollowers {
++    UIView *view = (UIView *)self;
++    IGProfileViewController *profile = BunkerProfileController(view);
++    IGWindow *window = (IGWindow *)view.window;
++    IGUserSession *session = [window respondsToSelector:@selector(userSession)] ? window.userSession : nil;
++    IGUser *account = session.user;
++    IGUser *profileUser = [profile respondsToSelector:@selector(user)] ? profile.user : nil;
++    NSString *userID = BunkerUserID([account respondsToSelector:@selector(pk)] ? account.pk : nil);
++    if (!userID && [window respondsToSelector:@selector(pk)]) userID = BunkerUserID(window.pk);
++    NSString *profileID = BunkerUserID([profileUser respondsToSelector:@selector(pk)] ? profileUser.pk : nil);
++    NSString *profileName = [profileUser respondsToSelector:@selector(username)] ? profileUser.username : nil;
++    NSString *accountName = [account respondsToSelector:@selector(username)] ? account.username : nil;
++    BOOL isOwnProfile = profileID ? [userID isEqualToString:profileID] :
++        (profileName.length && accountName.length && [profileName caseInsensitiveCompare:accountName] == NSOrderedSame);
++    if (!profile || !userID || !session || !isOwnProfile || UIAccessibilityIsVoiceOverRunning()) {
++        %orig;
++        return;
++    }
++
++    id pending = objc_getAssociatedObject(self, &BunkerPendingFollowersTap);
++    if (pending) {
++        objc_setAssociatedObject(self, &BunkerPendingFollowersTap, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++        if (!profile.presentedViewController) {
++            BunkerFollowBackController *controller = [[BunkerFollowBackController alloc] initWithSession:session userID:userID];
++            UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:controller];
++            [profile presentViewController:navigation animated:YES completion:nil];
++        }
++        return;
++    }
++
++    NSObject *token = [[NSObject alloc] init];
++    objc_setAssociatedObject(self, &BunkerPendingFollowersTap, token, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 320 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
++        if (objc_getAssociatedObject(self, &BunkerPendingFollowersTap) != token) return;
++        objc_setAssociatedObject(self, &BunkerPendingFollowersTap, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++        if (view.window && BunkerProfileController(view) == profile) {
++            %orig;
++        }
++    });
++}
++%end
++%end
++
++%ctor {
++    Class stats = objc_lookUpClass("_TtC23IGProfileHeaderIdentity38IGProfileHeaderStatButtonContainerView");
++    if (class_getInstanceMethod(stats, @selector(didTapFollowers))) {
++        %init(BunkerFollowBack435);
++    }
++}
+diff --git a/src/Features/General/Navigation.xm b/src/Features/General/Navigation.xm
+index ccf9d04..879cefb 100644
+--- a/src/Features/General/Navigation.xm
++++ b/src/Features/General/Navigation.xm
+@@ -27,12 +27,17 @@ BOOL isSurfaceShown(IGMainAppSurfaceIntent *surface) {
+ }
+ 
+ NSArray *filterSurfacesArray(NSArray *surfaces) {
++    if (![SCIUtils getBoolPref:@"hide_feed_tab"] &&
++        ![SCIUtils getBoolPref:@"hide_reels_tab"] &&
++        ![SCIUtils getBoolPref:@"hide_explore_tab"] &&
++        ![SCIUtils getBoolPref:@"hide_create_tab"]) {
++        return surfaces;
++    }
++    if (![surfaces isKindOfClass:[NSArray class]]) return surfaces;
+     NSMutableArray *filteredSurfaces = [NSMutableArray array];
+ 
+     for (IGMainAppSurfaceIntent *surface in surfaces) {
+-        if (![surface isKindOfClass:%c(IGMainAppSurfaceIntent)]) break;
+-
+-        if (isSurfaceShown(surface)) {
++        if (![surface isKindOfClass:%c(IGMainAppSurfaceIntent)] || isSurfaceShown(surface)) {
+             [filteredSurfaces addObject:surface];
+         }
+     }
+@@ -54,7 +59,10 @@ NSArray *filterSurfacesArray(NSArray *surfaces) {
+     // Prevents the wrong icon from being shown as selected because of mismatched surface array indexes
+     NSArray *_tabBarSurfaces = [SCIUtils getIvarForObj:self name:"_tabBarSurfaces"];
+ 
+-    [SCIUtils setIvarForObj:self name:"_tabBarSurfaces" value:filterSurfacesArray(_tabBarSurfaces)];
++    NSArray *filtered = filterSurfacesArray(_tabBarSurfaces);
++    if (filtered != _tabBarSurfaces) {
++        [SCIUtils setIvarForObj:self name:"_tabBarSurfaces" value:filtered];
++    }
+     
+     %orig;
+ }
+@@ -83,7 +91,10 @@ NSArray *filterSurfacesArray(NSArray *surfaces) {
+ 
+ }
+ - (void)setTabOrdering:(NSInteger)arg1 {
+-    return;
++    NSString *ordering = [SCIUtils getStringPref:@"nav_icon_ordering"];
++    if (![ordering isEqualToString:@"classic"] && ![ordering isEqualToString:@"standard"] && ![ordering isEqualToString:@"alternate"]) {
++        %orig;
++    }
+ }
+ 
+ - (BOOL)isTabSwipingEnabled {
+@@ -95,6 +106,9 @@ NSArray *filterSurfacesArray(NSArray *surfaces) {
+ 
+ }
+ - (void)setIsTabSwipingEnabled:(BOOL)arg1 {
+-    return;
++    NSString *swiping = [SCIUtils getStringPref:@"swipe_nav_tabs"];
++    if (![swiping isEqualToString:@"enabled"] && ![swiping isEqualToString:@"disabled"]) {
++        %orig;
++    }
+ }
+-%end
+\ No newline at end of file
++%end
+diff --git a/src/Features/StoriesAndMessages/DisableTypingStatus.x b/src/Features/StoriesAndMessages/DisableTypingStatus.x
+deleted file mode 100644
+index b8e2251..0000000
+--- a/src/Features/StoriesAndMessages/DisableTypingStatus.x
++++ /dev/null
+@@ -1,9 +0,0 @@
+-#import "../../Utils.h"
+-
+-%hook IGDirectTypingStatusService
+-- (void)updateOutgoingStatusIsActive:(_Bool)active threadKey:(id)key threadMetadata:(id)metadata typingStatusType:(long long)type {
+-    if ([SCIUtils getBoolPref:@"disable_typing_status"]) return;
+-
+-    return %orig(active, key, metadata, type);
+-}
+-%end
+\ No newline at end of file
+diff --git a/src/Features/StoriesAndMessages/KeepDeletedMessages.x b/src/Features/StoriesAndMessages/KeepDeletedMessages.x
+deleted file mode 100644
+index 014b66d..0000000
+--- a/src/Features/StoriesAndMessages/KeepDeletedMessages.x
++++ /dev/null
+@@ -1,22 +0,0 @@
+-#import "../../Utils.h"
+-#import "../../InstagramHeaders.h"
+-
+-%hook IGDirectRealtimeIrisThreadDelta
+-+ (id)removeItemWithMessageId:(id)arg1 {
+-    if ([SCIUtils getBoolPref:@"keep_deleted_message"]) {
+-        arg1 = NULL;
+-    }
+-
+-    return %orig(arg1);
+-}
+-%end
+-
+-%hook IGDirectMessageUpdate
+-+ (id)removeMessageWithMessageId:(id)arg1{
+-    if ([SCIUtils getBoolPref:@"keep_deleted_message"]) {
+-        arg1 = NULL;
+-    }
+-    
+-    return %orig(arg1);
+-}
+-%end
+\ No newline at end of file
+diff --git a/src/Features/StoriesAndMessages/SeenButtons.x b/src/Features/StoriesAndMessages/SeenButtons.x
+index 400d2ee..92c8c61 100644
+--- a/src/Features/StoriesAndMessages/SeenButtons.x
++++ b/src/Features/StoriesAndMessages/SeenButtons.x
+@@ -2,9 +2,7 @@
+ #import "../../Tweak.h"
+ #import "../../Utils.h"
+ 
+-// Seen buttons (in DMs)
+-// - Enables no seen for messages
+-// - Enables unlimited views of DM visual messages
++// Controls expiration of visual messages in DMs.
+ %hook IGTallNavigationBarView
+ - (void)setRightBarButtonItems:(NSArray <UIBarButtonItem *> *)items {
+     NSMutableArray *new_items = [[items filteredArrayUsingPredicate:
+@@ -17,12 +15,6 @@
+         }]
+     ] mutableCopy];
+ 
+-    // Messages seen
+-    if ([SCIUtils getBoolPref:@"remove_lastseen"]) {
+-        UIBarButtonItem *seenButton = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"checkmark.message"] style:UIBarButtonItemStylePlain target:self action:@selector(seenButtonHandler:)];
+-        [new_items addObject:seenButton];
+-    }
+-
+     // DM visual messages viewed
+     if ([SCIUtils getBoolPref:@"unlimited_replay"]) {
+         UIBarButtonItem *dmVisualMsgsViewedButton = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"photo.badge.checkmark"] style:UIBarButtonItemStylePlain target:self action:@selector(dmVisualMsgsViewedButtonHandler:)];
+@@ -38,15 +30,6 @@
+     %orig([new_items copy]);
+ }
+ 
+-// Messages seen button
+-%new - (void)seenButtonHandler:(UIBarButtonItem *)sender {
+-    UIViewController *nearestVC = [SCIUtils nearestViewControllerForView:self];
+-    if ([nearestVC isKindOfClass:%c(IGDirectThreadViewController)]) {
+-        [(IGDirectThreadViewController *)nearestVC markLastMessageAsSeen];
+-
+-        [SCIUtils showToastForDuration:2.5 title:@"Marked messages as seen"];
+-    }
+-}
+ // DM visual messages viewed button
+ %new - (void)dmVisualMsgsViewedButtonHandler:(UIBarButtonItem *)sender {
+     if (dmVisualMsgsViewedButtonEnabled) {
+@@ -64,17 +47,6 @@
+ }
+ %end
+ 
+-// Messages seen logic
+-%hook IGDirectThreadViewListAdapterDataSource
+-- (BOOL)shouldUpdateLastSeenMessage {
+-    if ([SCIUtils getBoolPref:@"remove_lastseen"]) {
+-        return false;
+-    }
+-    
+-    return %orig;
+-}
+-%end
+-
+ // DM stories viewed logic
+ %hook IGDirectVisualMessageViewerEventHandler
+ - (void)visualMessageViewerController:(id)arg1 didBeginPlaybackForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 {
+diff --git a/src/Settings/SCISettingsViewController.m b/src/Settings/SCISettingsViewController.m
+index cb211c9..82f996f 100644
+--- a/src/Settings/SCISettingsViewController.m
++++ b/src/Settings/SCISettingsViewController.m
+@@ -70,8 +70,8 @@ static char rowStaticRef[] = "row";
+     [super viewWillDisappear:animated];
+     
+     if (![[[NSUserDefaults standardUserDefaults] objectForKey:@"SCInstaFirstRun"] isEqualToString:SCIVersionString]) {
+-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"SCInsta Settings Info"
+-                                                                       message:@"In the future: Hold down on the three lines at the top right of your profile page, to re-open SCInsta settings."
++        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Bunker Settings"
++                                                                       message:@"Hold the menu button at the top right of your profile to reopen Bunker settings."
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+         
+         [alert addAction:[UIAlertAction actionWithTitle:@"I understand!"
+diff --git a/src/Settings/TweakSettings.m b/src/Settings/TweakSettings.m
+index 0a69cd4..487d401 100644
+--- a/src/Settings/TweakSettings.m
++++ b/src/Settings/TweakSettings.m
+@@ -15,12 +15,6 @@
+ 
+ + (NSArray *)sections {
+     return @[
+-        @{
+-            @"header": @"",
+-            @"rows": @[
+-                [SCISetting linkCellWithTitle:@"Donate" subtitle:@"Consider donating to support this tweak's development!" icon:[SCISymbol symbolWithName:@"heart.circle.fill" color:[UIColor systemPinkColor] size:20.0] url:@"https://ko-fi.com/SoCuul"]
+-            ]
+-        },
+         @{
+             @"header": @"",
+             @"rows": @[
+@@ -128,14 +122,6 @@
+                                            subtitle:@""
+                                                icon:[SCISymbol symbolWithName:@"rectangle.portrait.on.rectangle.portrait.angled"]
+                                         navSections:@[@{
+-                                            @"header": @"Messages",
+-                                            @"rows": @[
+-                                                [SCISetting switchCellWithTitle:@"Keep deleted messages" subtitle:@"Saves deleted messages in chat conversations" defaultsKey:@"keep_deleted_message"],
+-                                                [SCISetting switchCellWithTitle:@"Manually mark messages as seen" subtitle:@"Adds a button to DM threads, which will mark messages as seen" defaultsKey:@"remove_lastseen"],
+-                                                [SCISetting switchCellWithTitle:@"Disable typing status" subtitle:@"Prevents the typing indicator from being shown to others when you're typing in DMs" defaultsKey:@"disable_typing_status"],
+-                                            ]
+-                                        },
+-                                        @{
+                                             @"header": @"Visual messages & stories",
+                                             @"rows": @[
+                                                 [SCISetting switchCellWithTitle:@"Unlimited replay of visual messages" subtitle:@"Replays direct visual messages normal/once stories unlimited times (toggle with image check icon)" defaultsKey:@"unlimited_replay"],
+@@ -223,10 +209,10 @@
+                                             ]
+                                         },
+                                         @{
+-                                            @"header": @"SCInsta",
++                                            @"header": @"Bunker",
+                                             @"rows": @[
+-                                                [SCISetting switchCellWithTitle:@"Enable tweak settings quick-access" subtitle:@"Allows you to hold on the home tab to open the SCInsta settings" defaultsKey:@"settings_shortcut" requiresRestart:YES],
+-                                                [SCISetting switchCellWithTitle:@"Show tweak settings on app launch" subtitle:@"Automatically opens the SCInsta settings when the app launches" defaultsKey:@"tweak_settings_app_launch"],
++                                                [SCISetting switchCellWithTitle:@"Enable tweak settings quick-access" subtitle:@"Hold the home tab to open Bunker settings" defaultsKey:@"settings_shortcut" requiresRestart:YES],
++                                                [SCISetting switchCellWithTitle:@"Show tweak settings on app launch" subtitle:@"Automatically opens Bunker settings when the app launches" defaultsKey:@"tweak_settings_app_launch"],
+                                                 [SCISetting buttonCellWithTitle:@"Reset onboarding completion state"
+                                                                            subtitle:@""
+                                                                                icon:nil
+@@ -269,14 +255,6 @@
+                                         ]
+                 ]
+             ]
+-        },
+-        @{
+-            @"header": @"Credits",
+-            @"rows": @[
+-                [SCISetting linkCellWithTitle:@"Developer" subtitle:@"SoCuul" imageUrl:@"https://i.imgur.com/c9CbytZ.png" url:@"https://socuul.dev"],
+-                [SCISetting linkCellWithTitle:@"View Repo" subtitle:@"View the tweak's source code on GitHub" imageUrl:@"https://i.imgur.com/BBUNzeP.png" url:@"https://github.com/SoCuul/SCInsta"]
+-            ],
+-            @"footer": [NSString stringWithFormat:@"SCInsta %@\n\nInstagram v%@", SCIVersionString, [SCIUtils IGVersionString]]
+         }
+     ];
+ }
+@@ -289,7 +267,7 @@
+ ///
+ 
+ + (NSString *)title {
+-    return @"SCInsta Settings";
++    return @"Bunker Settings";
+ }
+ 
+ 
+diff --git a/src/Tweak.x b/src/Tweak.x
+index b81a98f..6ee2830 100644
+--- a/src/Tweak.x
++++ b/src/Tweak.x
+@@ -28,7 +28,6 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
+         @"detailed_color_picker": @(YES),
+         @"remove_screenshot_alert": @(YES),
+         @"call_confirm": @(YES),
+-        @"keep_deleted_message": @(YES),
+         @"dw_feed_posts": @(YES),
+         @"dw_reels": @(YES),
+         @"dw_story": @(YES),
+@@ -50,7 +49,7 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
+         [[NSUserDefaults standardUserDefaults] setValue:@(YES) forKey:@"instagram.override.project.lucent.navigation"];
+     }
+     else {
+-        [[NSUserDefaults standardUserDefaults] setValue:@(NO) forKey:@"instagram.override.project.lucent.navigation"];
++        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"instagram.override.project.lucent.navigation"];
+     }
+ 
+     return %orig;
+@@ -349,37 +348,39 @@ shouldPersistLastBugReportId:(id)arg6
+ %hook IGDirectInboxListAdapterDataSource
+ - (id)objectsForListAdapter:(id)arg1 {
+     NSArray *originalObjs = %orig();
++    BOOL hideSuggestedUsers = [SCIUtils getBoolPref:@"no_suggested_users"];
++    BOOL hideNotes = [SCIUtils getBoolPref:@"hide_notes_tray"];
++    if ((!hideSuggestedUsers && !hideNotes) || ![originalObjs isKindOfClass:[NSArray class]]) {
++        return originalObjs;
++    }
+     NSMutableArray *filteredObjs = [NSMutableArray arrayWithCapacity:[originalObjs count]];
+ 
+     for (id obj in originalObjs) {
+         BOOL shouldHide = NO;
+ 
+         // Section header
+-        if ([obj isKindOfClass:%c(IGDirectInboxHeaderCellViewModel)]) {
++        if (hideSuggestedUsers && [obj isKindOfClass:%c(IGDirectInboxHeaderCellViewModel)] && [obj respondsToSelector:@selector(title)]) {
++            id title = [obj title];
++            if (![title isKindOfClass:[NSString class]]) {
++                [filteredObjs addObject:obj];
++                continue;
++            }
+             
+             // "Suggestions" header
+-            if ([[obj title] isEqualToString:@"Suggestions"]) {
+-                if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
+-                    NSLog(@"[SCInsta] Hiding suggested chats (header: messages tab)");
+-
+-                    shouldHide = YES;
+-                }
++            if ([title isEqualToString:@"Suggestions"]) {
++                shouldHide = YES;
+             }
+ 
+             // "Accounts to follow/message" header
+-            else if ([[obj title] hasPrefix:@"Accounts to"]) {
+-                if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
+-                    NSLog(@"[SCInsta] Hiding suggested users: (header: inbox view)");
+-
+-                    shouldHide = YES;
+-                }
++            else if ([title hasPrefix:@"Accounts to"]) {
++                shouldHide = YES;
+             }
+ 
+         }
+ 
+         // Suggested recipients
+         else if ([obj isKindOfClass:%c(IGDirectInboxSuggestedThreadCellViewModel)]) {
+-            if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
++            if (hideSuggestedUsers) {
+                 NSLog(@"[SCInsta] Hiding suggested chats (recipients: channels tab)");
+ 
+                 shouldHide = YES;
+@@ -388,7 +389,7 @@ shouldPersistLastBugReportId:(id)arg6
+ 
+         // "Accounts to follow" recipients
+         else if ([obj isKindOfClass:%c(IGDiscoverPeopleItemConfiguration)] || [obj isKindOfClass:%c(IGDiscoverPeopleConnectionItemConfiguration)]) {
+-            if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
++            if (hideSuggestedUsers) {
+                 NSLog(@"[SCInsta] Hiding suggested chats: (recipients: inbox view)");
+ 
+                 shouldHide = YES;
+@@ -397,7 +398,7 @@ shouldPersistLastBugReportId:(id)arg6
+ 
+         // Hide notes tray
+         else if ([obj isKindOfClass:%c(IGDirectNotesTrayRowViewModel)]) {
+-            if ([SCIUtils getBoolPref:@"hide_notes_tray"]) {
++            if (hideNotes) {
+                 NSLog(@"[SCInsta] Hiding notes tray");
+ 
+                 shouldHide = YES;
