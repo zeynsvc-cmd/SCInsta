@@ -1,32 +1,65 @@
 #import "../../InstagramHeaders.h"
-#import "../../Settings/SCISettingsViewController.h"
+#import "../../Utils.h"
 
-// Show SCInsta tweak settings by holding on the settings/more icon under profile for ~1 second
+@interface SCIProfileSettingsLongPress : UILongPressGestureRecognizer
+@end
+
+@implementation SCIProfileSettingsLongPress
+
+- (instancetype)init {
+    self = [super initWithTarget:nil action:NULL];
+    if (self) {
+        [self addTarget:self action:@selector(openSettings:)];
+    }
+    return self;
+}
+
+- (void)openSettings:(UILongPressGestureRecognizer *)gesture {
+    UIWindow *window = gesture.view.window;
+    if (gesture.state == UIGestureRecognizerStateBegan && window) {
+        [SCIUtils showSettingsVC:window];
+    }
+}
+
+@end
+
+static void SCIInstallProfileSettingsGesture(UIView *button) {
+    NSString *identifier = button.accessibilityIdentifier;
+    if (!button.window ||
+        !([identifier isEqualToString:@"profile-more-button"] ||
+          [identifier isEqualToString:@"profile-more-bar-button"])) {
+        return;
+    }
+
+    NSArray<UIGestureRecognizer *> *recognizers = button.gestureRecognizers;
+    for (UIGestureRecognizer *recognizer in recognizers) {
+        if ([recognizer isKindOfClass:[SCIProfileSettingsLongPress class]]) {
+            return;
+        }
+    }
+
+    SCIProfileSettingsLongPress *longPress = [[SCIProfileSettingsLongPress alloc] init];
+    for (UIGestureRecognizer *recognizer in recognizers) {
+        if ([recognizer isKindOfClass:[UILongPressGestureRecognizer class]]) {
+            [recognizer requireGestureRecognizerToFail:longPress];
+        }
+    }
+    [button addGestureRecognizer:longPress];
+}
+
+// Older Instagram versions use the Objective-C navigation button.
 %hook IGBadgedNavigationButton
 - (void)didMoveToWindow {
     %orig;
-
-    if ([self.accessibilityIdentifier isEqualToString:@"profile-more-button"]) {
-        [self addLongPressGestureRecognizer];
-    }
-
-    return;
+    SCIInstallProfileSettingsGesture(self);
 }
+%end
 
-%new - (void)addLongPressGestureRecognizer {
-    if ([self.gestureRecognizers count] == 0) {
-        NSLog(@"[SCInsta] Adding tweak settings long press gesture recognizer");
-
-        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-        [self addGestureRecognizer:longPress];
-    }
-}
-%new - (void)handleLongPress:(UILongPressGestureRecognizer *)sender {
-    if (sender.state != UIGestureRecognizerStateBegan) return;
-    
-    NSLog(@"[SCInsta] Tweak settings gesture activated");
-
-    [SCIUtils showSettingsVC:[self window]];
+// IGProfileNavigation.IGBadgedNavigationButton in newer Instagram versions.
+%hook _TtC19IGProfileNavigation24IGBadgedNavigationButton
+- (void)didMoveToWindow {
+    %orig;
+    SCIInstallProfileSettingsGesture((UIView *)self);
 }
 %end
 
