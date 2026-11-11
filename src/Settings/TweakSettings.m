@@ -52,7 +52,8 @@
                                         @{
                                             @"header": @"Focus/distractions",
                                             @"rows": @[
-                                                [SCISetting switchCellWithTitle:@"No suggested users" subtitle:@"Hides all suggested users for you to follow, outside your feed" defaultsKey:@"no_suggested_users"],
+                                                [SCISetting switchCellWithTitle:@"No suggested users" subtitle:@"Hides suggested users in notifications, follow lists and other areas" defaultsKey:@"no_suggested_users"],
+                                                [SCISetting switchCellWithTitle:@"Hide suggested accounts on profiles" subtitle:@"Hides the suggested accounts carousel and button on profiles" defaultsKey:@"hide_profile_suggestions"],
                                                 [SCISetting switchCellWithTitle:@"No suggested chats" subtitle:@"Hides the suggested broadcast channels in direct messages" defaultsKey:@"no_suggested_chats"],
                                                 [SCISetting switchCellWithTitle:@"Hide explore posts grid" subtitle:@"Hides the grid of suggested posts on the explore/search tab" defaultsKey:@"hide_explore_grid"],
                                                 [SCISetting switchCellWithTitle:@"Hide trending searches" subtitle:@"Hides the trending searches under the explore search bar" defaultsKey:@"hide_trending_searches"],
