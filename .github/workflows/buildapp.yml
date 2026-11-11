@@ -36,6 +36,12 @@ jobs:
                 path: main
                 submodules: recursive
 
+            - name: Apply Bunker source changes
+              working-directory: main
+              run: |
+                git apply --check bunker-source.patch
+                git apply bunker-source.patch
+
             - name: Install Dependencies
               run: brew install ldid dpkg make
 
@@ -125,26 +131,27 @@ jobs:
             - name: Rename IPA to include version info
               run: |
                 cd main/packages
-                mv "$(ls -t | head -n1)" "SCInsta_sideloaded_v${SCINSTA_VERSION}.ipa"
+                mv SCInsta-sideloaded.ipa "Bunker_v${SCINSTA_VERSION}.ipa"
 
             - name: Pass package name to upload action
               id: package_name
               run: |
-                echo "package=$(ls -t main/packages |  head -n1)" >> "$GITHUB_OUTPUT"
+                echo "package=Bunker_v${SCINSTA_VERSION}.ipa" >> "$GITHUB_OUTPUT"
 
             - name: Upload Artifact
               if: ${{ inputs.upload_artifact }}
+              continue-on-error: true
               uses: actions/upload-artifact@v4
               with:
-                name: SCInsta_sideloaded_v${{ steps.scinsta_version.outputs.version }}
+                name: Bunker_v${{ steps.scinsta_version.outputs.version }}
                 path: ${{ github.workspace }}/main/packages/${{ steps.package_name.outputs.package }}
                 if-no-files-found: error
 
             - name: Create Release
               uses: softprops/action-gh-release@v2.0.6
               with:
-                name: SCInsta_sideloaded_v${{ steps.scinsta_version.outputs.version }}
-                files: ${{ github.workspace }}/main/packages/SCInsta_sideloaded_v*.ipa
+                name: Bunker_v${{ steps.scinsta_version.outputs.version }}
+                files: ${{ github.workspace }}/main/packages/${{ steps.package_name.outputs.package }}
                 draft: true
 
             - name: Output Release URL
