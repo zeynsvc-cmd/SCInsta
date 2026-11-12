@@ -18,6 +18,24 @@ index a0af675..963f0b0 100644
 -fi
 \ No newline at end of file
 +fi
+diff --git a/control b/control
+index cbf223b..6af438e 100644
+--- a/control
++++ b/control
+@@ -1,10 +1,10 @@
+ Package: com.socuul.scinsta
+ Name: Bunker
+-Version: 1.1.1
++Version: 1.1.1-2
+ Architecture: iphoneos-arm
+ Description: A feature-rich tweak for Instagram on iOS!
+ Homepage: https://github.com/SoCuul/SCInsta
+ Maintainer: SoCuul
+ Author: SoCuul
+ Section: Tweaks
+-Depends: mobilesubstrate
+\ No newline at end of file
++Depends: mobilesubstrate
 diff --git a/src/Features/General/FollowBack.x b/src/Features/General/FollowBack.x
 new file mode 100644
 index 0000000..fffa0a7
@@ -547,7 +565,7 @@ index 0a69cd4..487d401 100644
  
  
 diff --git a/src/Tweak.x b/src/Tweak.x
-index b81a98f..6ee2830 100644
+index b81a98f..c9f2584 100644
 --- a/src/Tweak.x
 +++ b/src/Tweak.x
 @@ -28,7 +28,6 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
@@ -558,7 +576,7 @@ index b81a98f..6ee2830 100644
          @"dw_feed_posts": @(YES),
          @"dw_reels": @(YES),
          @"dw_story": @(YES),
-@@ -50,7 +49,7 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
+@@ -50,13 +49,14 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
          [[NSUserDefaults standardUserDefaults] setValue:@(YES) forKey:@"instagram.override.project.lucent.navigation"];
      }
      else {
@@ -567,7 +585,31 @@ index b81a98f..6ee2830 100644
      }
  
      return %orig;
-@@ -349,37 +348,39 @@ shouldPersistLastBugReportId:(id)arg6
+ }
+ - (_Bool)application:(UIApplication *)application didFinishLaunchingWithOptions:(id)arg2 {
+-    %orig;
++    _Bool launched = %orig;
++    if (!launched) return launched;
+ 
+     // Open settings for first-time users
+     double openDelay = [SCIUtils getBoolPref:@"tweak_settings_app_launch"] ? 0.0 : 5.0;
+@@ -74,14 +74,11 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
+         }
+     });
+ 
+-    NSLog(@"[SCInsta] Cleaning cache...");
+-    [SCIUtils cleanCache];
+-
+     if ([SCIUtils getBoolPref:@"flex_app_launch"]) {
+         [[objc_getClass("FLEXManager") sharedManager] showExplorer];
+     }
+ 
+-    return true;
++    return launched;
+ }
+ 
+ - (void)applicationDidBecomeActive:(id)arg1 {
+@@ -349,37 +346,39 @@ shouldPersistLastBugReportId:(id)arg6
  %hook IGDirectInboxListAdapterDataSource
  - (id)objectsForListAdapter:(id)arg1 {
      NSArray *originalObjs = %orig();
@@ -621,7 +663,7 @@ index b81a98f..6ee2830 100644
                  NSLog(@"[SCInsta] Hiding suggested chats (recipients: channels tab)");
  
                  shouldHide = YES;
-@@ -388,7 +389,7 @@ shouldPersistLastBugReportId:(id)arg6
+@@ -388,7 +387,7 @@ shouldPersistLastBugReportId:(id)arg6
  
          // "Accounts to follow" recipients
          else if ([obj isKindOfClass:%c(IGDiscoverPeopleItemConfiguration)] || [obj isKindOfClass:%c(IGDiscoverPeopleConnectionItemConfiguration)]) {
@@ -630,7 +672,7 @@ index b81a98f..6ee2830 100644
                  NSLog(@"[SCInsta] Hiding suggested chats: (recipients: inbox view)");
  
                  shouldHide = YES;
-@@ -397,7 +398,7 @@ shouldPersistLastBugReportId:(id)arg6
+@@ -397,7 +396,7 @@ shouldPersistLastBugReportId:(id)arg6
  
          // Hide notes tray
          else if ([obj isKindOfClass:%c(IGDirectNotesTrayRowViewModel)]) {
@@ -639,3 +681,89 @@ index b81a98f..6ee2830 100644
                  NSLog(@"[SCInsta] Hiding notes tray");
  
                  shouldHide = YES;
+diff --git a/src/Utils.h b/src/Utils.h
+index 91dc661..dee2ec6 100644
+--- a/src/Utils.h
++++ b/src/Utils.h
+@@ -27,7 +27,6 @@
+ 
+ + (_Bool)liquidGlassEnabledBool:(_Bool)fallback;
+ 
+-+ (void)cleanCache;
+ 
+ // Displaying View Controllers
+ + (void)showQuickLookVC:(NSArray<id> *)items;
+@@ -80,4 +79,4 @@
+ + (id)getIvarForObj:(id)obj name:(const char *)name;
+ + (void)setIvarForObj:(id)obj name:(const char *)name value:(id)value;
+ 
+-@end
+\ No newline at end of file
++@end
+diff --git a/src/Utils.m b/src/Utils.m
+index f91c598..22b8d8b 100644
+--- a/src/Utils.m
++++ b/src/Utils.m
+@@ -23,55 +23,6 @@
+     return setting ? true : fallback;
+ }
+ 
+-+ (void)cleanCache {
+-    NSFileManager *fileManager = [NSFileManager defaultManager];
+-    NSMutableArray<NSError *> *deletionErrors = [NSMutableArray array];
+-
+-    // Temp folder
+-    // * disabled bc app crashed trying to delete certain files inside it
+-    // todo: remove the above disclaimer if this new code doesn't cause crashing
+-    NSArray *tempFolderContents = [fileManager contentsOfDirectoryAtURL:[NSURL fileURLWithPath:NSTemporaryDirectory()] includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
+-
+-    for (NSURL *fileURL in tempFolderContents) {
+-        NSError *cacheItemDeletionError;
+-        [fileManager removeItemAtURL:fileURL error:&cacheItemDeletionError];
+-
+-        if (cacheItemDeletionError) [deletionErrors addObject:cacheItemDeletionError];
+-    }
+-
+-    // Analytics folder
+-    NSString *analyticsFolder = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) objectAtIndex:0] stringByAppendingPathComponent:@"Application Support/com.burbn.instagram/analytics"];
+-    NSArray *analyticsFolderContents = [fileManager contentsOfDirectoryAtURL:[[NSURL alloc] initFileURLWithPath:analyticsFolder] includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
+-
+-    for (NSURL *fileURL in analyticsFolderContents) {
+-        NSError *cacheItemDeletionError;
+-        [fileManager removeItemAtURL:fileURL error:&cacheItemDeletionError];
+-
+-        if (cacheItemDeletionError) [deletionErrors addObject:cacheItemDeletionError];
+-    }
+-    
+-    // Caches folder
+-    NSString *cachesFolder = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) objectAtIndex:0] stringByAppendingPathComponent:@"Caches"];
+-    NSArray *cachesFolderContents = [fileManager contentsOfDirectoryAtURL:[[NSURL alloc] initFileURLWithPath:cachesFolder] includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
+-    
+-    for (NSURL *fileURL in cachesFolderContents) {
+-        NSError *cacheItemDeletionError;
+-        [fileManager removeItemAtURL:fileURL error:&cacheItemDeletionError];
+-
+-        if (cacheItemDeletionError) [deletionErrors addObject:cacheItemDeletionError];
+-    }
+-
+-    // Log errors
+-    if (deletionErrors.count > 1) {
+-
+-        for (NSError *error in deletionErrors) {
+-            NSLog(@"[SCInsta] File Deletion Error: %@", error);
+-        }
+-
+-    }
+-
+-}
+-
+ // Displaying View Controllers
+ + (void)showQuickLookVC:(NSArray<id> *)items {
+     QLPreviewController *previewController = [[QLPreviewController alloc] init];
+@@ -317,4 +268,4 @@
+ }
+ 
+ 
+-@end
+\ No newline at end of file
++@end
