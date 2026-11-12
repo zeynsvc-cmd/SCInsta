@@ -19,23 +19,13 @@ index a0af675..963f0b0 100644
 \ No newline at end of file
 +fi
 diff --git a/control b/control
-index cbf223b..6af438e 100644
 --- a/control
 +++ b/control
-@@ -1,10 +1,10 @@
- Package: com.socuul.scinsta
+@@ -2,3 +2,3 @@
  Name: Bunker
 -Version: 1.1.1
 +Version: 1.1.1-2
  Architecture: iphoneos-arm
- Description: A feature-rich tweak for Instagram on iOS!
- Homepage: https://github.com/SoCuul/SCInsta
- Maintainer: SoCuul
- Author: SoCuul
- Section: Tweaks
--Depends: mobilesubstrate
-\ No newline at end of file
-+Depends: mobilesubstrate
 diff --git a/src/Features/General/FollowBack.x b/src/Features/General/FollowBack.x
 new file mode 100644
 index 0000000..fffa0a7
